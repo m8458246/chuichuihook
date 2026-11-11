@@ -147,7 +147,8 @@ public final class Logger {
             if (target == null) {
                 ContentValues cv = new ContentValues();
                 cv.put(MediaStore.Downloads.DISPLAY_NAME, LOG_NAME);
-                cv.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
+                // 用 octet-stream 避免 MediaStore 自动补 .txt 后缀
+                cv.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
                 cv.put(MediaStore.Downloads.RELATIVE_PATH, LOG_DIR);
                 target = cr.insert(collection, cv);
             }
@@ -174,11 +175,12 @@ public final class Logger {
     private static Uri findLog(ContentResolver cr, Uri collection) {
         Cursor c = null;
         try {
+            // 用 LIKE：MediaStore 可能把 DISPLAY_NAME 补成 hook.log.txt 或 hook.log (1).txt
             c = cr.query(collection,
                     new String[]{MediaStore.Downloads._ID},
-                    MediaStore.Downloads.DISPLAY_NAME + "=? AND "
+                    MediaStore.Downloads.DISPLAY_NAME + " LIKE ? AND "
                             + MediaStore.Downloads.RELATIVE_PATH + "=?",
-                    new String[]{LOG_NAME, LOG_DIR}, null);
+                    new String[]{LOG_NAME + "%", LOG_DIR}, null);
             if (c != null && c.moveToFirst()) {
                 return ContentUris.withAppendedId(collection, c.getLong(0));
             }

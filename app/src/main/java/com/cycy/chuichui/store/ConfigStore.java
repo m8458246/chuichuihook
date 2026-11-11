@@ -112,9 +112,9 @@ public final class ConfigStore {
             try {
                 c = cr.query(collection,
                         new String[]{android.provider.MediaStore.Downloads._ID},
-                        android.provider.MediaStore.Downloads.DISPLAY_NAME + "=? AND "
+                        android.provider.MediaStore.Downloads.DISPLAY_NAME + " LIKE ? AND "
                                 + android.provider.MediaStore.Downloads.RELATIVE_PATH + "=?",
-                        new String[]{FILE_NAME, PUBLIC_DIR}, null);
+                        new String[]{FILE_NAME + "%", PUBLIC_DIR}, null);
                 if (c != null && c.moveToFirst()) {
                     target = android.content.ContentUris.withAppendedId(collection, c.getLong(0));
                 }
