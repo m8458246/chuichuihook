@@ -20,6 +20,7 @@ import com.cycy.chuichui.model.Profile;
 import com.cycy.chuichui.model.Profiles;
 import com.cycy.chuichui.store.ConfigStore;
 import com.cycy.chuichui.util.Collector;
+import com.cycy.chuichui.util.CoordConverter;
 
 import java.util.Locale;
 
@@ -125,7 +126,7 @@ public class EditActivity extends Activity {
         tvHint.setTextSize(12);
         tvHint.setTextColor(0xFF666666);
         tvHint.setPadding(0, dp(6), 0, dp(6));
-        tvHint.setText("采集用的是系统定位（不是高德 SDK），室内可能拿不到；拿不到就直接手填经纬度。");
+        tvHint.setText("采集用的是系统定位（不是高德 SDK），拿到后会自动从 WGS84 转成 GCJ-02；室内拿不到就直接手填。");
         c.addView(tvHint);
 
         section(c, "地址（会原样写进 AMapLocation）");
@@ -190,8 +191,14 @@ public class EditActivity extends Activity {
                 tvHint.setText("定位失败：" + error);
                 return;
             }
-            etLat.setText(String.format(Locale.US, "%.7f", location.getLatitude()));
-            etLng.setText(String.format(Locale.US, "%.7f", location.getLongitude()));
+            double wgsLat = location.getLatitude();
+            double wgsLng = location.getLongitude();
+            // 系统给的是 WGS84，高德系 SDK 用 GCJ-02，不转换会偏 300~600 米
+            double[] gcj = CoordConverter.wgs84ToGcj02(wgsLat, wgsLng);
+            double shift = CoordConverter.distance(wgsLat, wgsLng, gcj[0], gcj[1]);
+
+            etLat.setText(String.format(Locale.US, "%.7f", gcj[0]));
+            etLng.setText(String.format(Locale.US, "%.7f", gcj[1]));
             if (location.hasAccuracy()) {
                 etAccuracy.setText(String.format(Locale.US, "%.1f", location.getAccuracy()));
             }
@@ -199,9 +206,10 @@ public class EditActivity extends Activity {
                 etAltitude.setText(String.format(Locale.US, "%.1f", location.getAltitude()));
             }
             tvHint.setText(String.format(Locale.US,
-                    "采集成功：%s，精度 %.0f 米\n正在查询地址…",
-                    location.getProvider(), location.getAccuracy()));
-            geocode(location.getLatitude(), location.getLongitude());
+                    "采集成功：%s，精度 %.0f 米\n已从 WGS84 转成 GCJ-02（偏移 %.0f 米）\n正在查询地址…",
+                    location.getProvider(), location.getAccuracy(), shift));
+            // 逆地理编码用原始 WGS84 坐标，查出来的地址才对得上
+            geocode(wgsLat, wgsLng);
         });
     }
 
