@@ -38,6 +38,8 @@ public final class ConfigReader {
     private static long cachedAt;
     private static String lastSource = "";
     private static Context appContext;
+    private static boolean listedRemote;
+    private static boolean loggedRemoteError;
 
     private ConfigReader() {
     }
@@ -66,8 +68,21 @@ public final class ConfigReader {
     private static Profiles load() {
         String json;
 
-        // 1) openRemoteFile
+        // 1) openRemoteFile（先列一次目录，方便定位路径语义）
         if (module != null) {
+            if (!listedRemote) {
+                listedRemote = true;
+                try {
+                    String[] files = module.listRemoteFiles();
+                    StringBuilder sb = new StringBuilder();
+                    if (files != null) {
+                        for (String f : files) sb.append(f).append(' ');
+                    }
+                    Logger.i("remote files: [" + sb.toString().trim() + "]");
+                } catch (Throwable t) {
+                    Logger.w("listRemoteFiles 失败: " + t);
+                }
+            }
             for (String name : new String[]{ConfigStore.FILE_NAME, "files/" + ConfigStore.FILE_NAME}) {
                 json = readRemoteFile(name);
                 if (valid(json)) {
@@ -96,7 +111,9 @@ public final class ConfigReader {
         // 3) ContentProvider
         try {
             Context ctx = appContext();
-            if (ctx != null) {
+            if (ctx == null) {
+                Logger.w("拿不到 Context，provider 通道跳过");
+            } else {
                 Bundle b = ctx.getContentResolver().call(
                         Uri.parse("content://" + ConfigStore.AUTHORITY), "config", null, null);
                 if (b != null) {
@@ -139,6 +156,10 @@ public final class ConfigReader {
             while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
             return new String(bos.toByteArray(), StandardCharsets.UTF_8);
         } catch (Throwable t) {
+            if (!loggedRemoteError) {
+                loggedRemoteError = true;
+                Logger.w("openRemoteFile(" + name + ") 失败: " + t);
+            }
             return null;
         } finally {
             try {
@@ -152,17 +173,45 @@ public final class ConfigReader {
         }
     }
 
-    /** 目标进程里没有 Context，通过 ActivityThread 反射拿 Application */
+    /** 目标进程里没有 Context：先试 currentApplication，再退到 systemContext */
     static Context appContext() {
         if (appContext != null) return appContext;
+
+        // 1) ActivityThread.currentApplication()（App 已经起来时最准）
         try {
             Class<?> at = Class.forName("android.app.ActivityThread");
             Method m = at.getDeclaredMethod("currentApplication");
             m.setAccessible(true);
             Object app = m.invoke(null);
-            if (app instanceof Context) appContext = (Context) app;
-        } catch (Throwable ignored) {
+            if (app instanceof Context) {
+                appContext = (Context) app;
+                return appContext;
+            }
+        } catch (Throwable t) {
+            Logger.w("currentApplication 不可用: " + t);
         }
-        return appContext;
+
+        // 2) ActivityThread.currentActivityThread().getSystemContext()
+        //    系统 Context 的 ContentResolver 调 Provider 不受调用方包可见性影响
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            Method cur = at.getDeclaredMethod("currentActivityThread");
+            cur.setAccessible(true);
+            Object thread = cur.invoke(null);
+            if (thread != null) {
+                Method gsc = at.getDeclaredMethod("getSystemContext");
+                gsc.setAccessible(true);
+                Object ctx = gsc.invoke(thread);
+                if (ctx instanceof Context) {
+                    appContext = (Context) ctx;
+                    Logger.i("使用 systemContext 访问 provider");
+                    return appContext;
+                }
+            }
+        } catch (Throwable t) {
+            Logger.w("systemContext 不可用: " + t);
+        }
+
+        return null;
     }
 }
