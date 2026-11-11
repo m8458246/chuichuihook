@@ -43,8 +43,9 @@ APK 下载：<https://github.com/m8458246/chuichuihook/releases/download/latest/
 1. 打开「锤锤102」→ 新建配置
 2. 点「采集当前位置」用系统定位拿真实坐标（室内可能失败，直接手填也行）
 3. 需要地址一致就点「逆地理编码」，或手填省/市/区/街道
-4. 保存后点主界面的「同步」，把配置写进 LSPosed 的共享目录
-5. 钉钉下次定位就会用这份配置
+4. 保存后**钉钉里立即生效**（模块 App 会主动推送；钉钉进程没运行的话，下次定位会自己来要）
+5. 点列表项切换当前配置；长按列表项可以「编辑 / 删除」
+6. 「同步」按钮把配置写进 LSPosed 共享目录（需要 root；不点也能用，只是钉钉重启后可能读回旧配置）
 
 「运行日志」页显示目标进程回传的日志，能看到：
 
@@ -60,32 +61,35 @@ hook 安装完成: 定位 2 / WiFi 3 / 基站 1
 
 ## 配置通道说明（这版踩过的坑）
 
-| 通道 | 状态 | 原因 |
+| 通道 | 状态 | 说明 |
 |---|---|---|
 | `XSharedPreferences`（原版） | ❌ | targetApiVersion=102 禁用 `de.robv.*` |
 | `getRemotePreferences` | ⚠️ 空 | LSPosed 2.2.1 的 remote prefs 走 daemon 数据库，模块侧没有写入入口 |
 | `ContentResolver.call` | ❌ | 钉钉 targetSdk=30，Android 11+ 包可见性 → `Unknown authority` |
 | `sendBroadcast(setPackage)` | ❌ | 包可见性同样拦截广播，AMS 直接丢弃 |
-| `sendBroadcast(ComponentName)` | ❌ | 显式组件也受调用方可见性限制 |
+| `sendBroadcast(ComponentName)` | ⚠️ | 模块 App 未被 force-stop 时可用（实测能拉起被杀进程） |
 | **`openRemoteFile`** | ✅ | daemon 通过 Binder 传 fd，不受包可见性限制 |
+| **配置推送**（模块 App → 钉钉） | ✅ | 保存后主动广播，钉钉进程内动态 receiver 收到即更新缓存 |
 
-所以最终方案：
+实际生效顺序（`ConfigReader`）：
 
 ```
-模块 App 保存配置
-  ├─ 写 files/profiles.json + SharedPreferences
-  └─ su 复制到 /data/adb/lspd/modules/0/com.cycy.chuichui/files/profiles.json
-                                    ↓
-目标进程 XposedInterface.openRemoteFile("profiles.json") 读取
+1. openRemoteFile("profiles.json")   ← /data/adb/lspd/modules/<userId>/<pkg>/files/
+2. getRemotePreferences("profile")
+3. ContentProvider call("config")
+4. 显式广播请求（FLAG_INCLUDE_STOPPED_PACKAGES）
+5. 模块 App 主动推送（保存配置时）
 ```
 
-**`/data/adb` 是 root 700，普通 App 写不了**，所以「同步」需要 root 权限：
+推送/广播拿到的配置会标记 `fromPush`，5 分钟内优先于 remote-file，
+所以改完配置不用重启钉钉。
+
+**`/data/adb` 是 root 700，普通 App 写不了**，所以「同步」按钮需要 root 权限：
 
 - 有 KernelSU / Magisk 管理器：首次点「同步」时授权一次即可
 - 没有管理器：用 MT 管理器手动复制
   `files/profiles.json` → `/data/adb/lspd/modules/0/com.cycy.chuichui/files/`
-
-手动复制的话记得 `chmod 666` 那个文件。
+- 完全不碰 root 也能用：只要模块 App 没被 force-stop，广播/推送通道就够了
 
 ---
 
