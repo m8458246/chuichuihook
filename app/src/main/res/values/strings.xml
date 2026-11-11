@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">锤锤102</string>
+    <string name="title_edit">编辑配置</string>
+    <string name="title_log">运行日志</string>
+
+    <string name="hint_name">名称（如：公司）</string>
+    <string name="hint_lat">纬度，如 25.064565</string>
+    <string name="hint_lng">经度，如 102.702959</string>
+    <string name="hint_radius">漂移半径（米），0 = 不漂移</string>
+
+    <string name="btn_collect">采集当前位置</string>
+    <string name="btn_geocode">逆地理编码</string>
+    <string name="btn_save">保存</string>
+    <string name="btn_cancel">取消</string>
+    <string name="btn_delete">删除</string>
+    <string name="btn_new">新建配置</string>
+    <string name="btn_collect_wifi">采集当前 WiFi</string>
+    <string name="btn_collect_cell">采集当前基站</string>
+    <string name="btn_refresh">刷新</string>
+    <string name="btn_clear_log">清空日志</string>
+</resources>

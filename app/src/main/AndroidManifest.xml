@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Android 11+ 包可见性：需要判断/拉起钉钉 -->
+    <queries>
+        <package android:name="com.alibaba.android.rimet" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.EditActivity"
+            android:exported="false"
+            android:label="@string/title_edit"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".ui.LogActivity"
+            android:exported="false"
+            android:label="@string/title_log" />
+
+        <!-- 模块与目标进程之间的兜底通道；只读配置 + 写日志，不做敏感操作 -->
+        <provider
+            android:name=".provider.ConfigProvider"
+            android:authorities="com.cycy.chuichui.config"
+            android:exported="true" />
+    </application>
+
+</manifest>

@@ -1,0 +1,63 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.cycy.chuichui'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.cycy.chuichui"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+        // 模块自身不需要多 dex
+        multiDexEnabled false
+    }
+
+    signingConfigs {
+        stable {
+            storeFile file("../keystore.jks")
+            storePassword "chuichui123"
+            keyAlias "chuichui"
+            keyPassword "chuichui123"
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.stable
+            minifyEnabled false
+        }
+        release {
+            signingConfig signingConfigs.stable
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            // 不加这句，META-INF/xposed/* 可能被合并策略吃掉
+            merges += "META-INF/xposed/*"
+        }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    // 框架运行时注入，绝不能打进 APK
+    compileOnly "io.github.libxposed:api:102.0.0"
+}
