@@ -97,6 +97,30 @@ public final class AmapHooks {
             Logger.w("没找到可用的 setLocationListener 重载");
         }
 
+        // 自检：用当前配置构造一个伪造对象，再复制到一个空白对象上，
+        // 验证「反射构造 + setter 写入 + 全字段复制」整条链路是否真的能跑通。
+        // 这段不依赖任何真实定位回调，装完 hook 就能看到结果。
+        try {
+            Profile p = ConfigReader.current();
+            if (p != null) {
+                Object fake = buildFake(locationCls, p, true);
+                Object real = newInstance(locationCls);
+                if (fake != null && real != null) {
+                    int fields = copyFields(fake, real);
+                    Logger.i(String.format(Locale.US,
+                            "自检通过: 复制字段 %d，坐标 %.6f,%.6f，地址 %s",
+                            fields,
+                            getDouble(real, "getLatitude", 0),
+                            getDouble(real, "getLongitude", 0),
+                            getString(real, "getAddress", "")));
+                } else {
+                    Logger.w("自检失败: 构造对象为空 fake=" + fake + " real=" + real);
+                }
+            }
+        } catch (Throwable t) {
+            Logger.e("自检异常", t);
+        }
+
         return n;
     }
 
@@ -281,6 +305,16 @@ public final class AmapHooks {
             Method m = o.getClass().getMethod(name);
             Object v = m.invoke(o);
             if (v instanceof Number) return ((Number) v).doubleValue();
+        } catch (Throwable ignored) {
+        }
+        return def;
+    }
+
+    static String getString(Object o, String name, String def) {
+        try {
+            Method m = o.getClass().getMethod(name);
+            Object v = m.invoke(o);
+            if (v instanceof String) return (String) v;
         } catch (Throwable ignored) {
         }
         return def;
