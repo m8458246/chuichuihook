@@ -66,21 +66,35 @@ public final class AmapHooks {
         }
 
         // 2) 包住定位回调，把伪造值刷到真实回调对象上
-        try {
-            Method m = clientCls.getDeclaredMethod("setLocationListener", listenerCls);
-            m.setAccessible(true);
-            module.hook(m).setId("chuichui_set_listener").intercept(chain -> {
-                Object original = chain.getArg(0);
-                if (original == null) return chain.proceed();
-                Profile p = ConfigReader.current();
-                if (p == null || !p.enabled) return chain.proceed();
-                Object proxy = Proxy.newProxyInstance(cl, new Class[]{listenerCls},
-                        new ListenerHandler(original, locationCls));
-                return chain.proceed(new Object[]{proxy});
-            });
+        //    高德有 setLocationListener(Listener) / setLocationListener(Listener, long) 等重载，
+        //    这里按参数类型把所有重载都挂上，避免漏掉钉钉实际用的那个。
+        int listenerHooks = 0;
+        for (Method m : clientCls.getDeclaredMethods()) {
+            if (!"setLocationListener".equals(m.getName())) continue;
+            Class<?>[] pts = m.getParameterTypes();
+            if (pts.length == 0 || !pts[0].isAssignableFrom(listenerCls)) continue;
+            try {
+                m.setAccessible(true);
+                module.hook(m).setId("chuichui_set_listener_" + pts.length).intercept(chain -> {
+                    Object original = chain.getArg(0);
+                    if (original == null) return chain.proceed();
+                    Profile p = ConfigReader.current();
+                    if (p == null || !p.enabled) return chain.proceed();
+                    Object proxy = Proxy.newProxyInstance(cl, new Class[]{listenerCls},
+                            new ListenerHandler(original, locationCls));
+                    Object[] args = chain.getArgs().toArray();
+                    args[0] = proxy;
+                    return chain.proceed(args);
+                });
+                listenerHooks++;
+            } catch (Throwable t) {
+                Logger.w("hook setLocationListener(" + pts.length + " 参数) 失败: " + t);
+            }
+        }
+        if (listenerHooks > 0) {
             n++;
-        } catch (Throwable t) {
-            Logger.w("hook setLocationListener 失败: " + t);
+        } else {
+            Logger.w("没找到可用的 setLocationListener 重载");
         }
 
         return n;
@@ -199,8 +213,8 @@ public final class AmapHooks {
             } catch (Throwable e) {
                 continue;
             }
-            // null 跳过：避免把真实对象的 extras / locationDetail 之类清空
-            if (value == null) continue;
+            // null 也要覆盖（extras / locationDetail 这类对象字段留着真实值会泄露真实位置），
+            // 基本类型参数传 null 会抛 IllegalArgumentException，被下面的 catch 吃掉
             try {
                 setter.invoke(dst, value);
                 n++;

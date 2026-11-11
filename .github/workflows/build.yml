@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -39,3 +42,20 @@ jobs:
           name: chuichui-apk
           path: out/*.apk
           retention-days: 30
+
+      # 发布到 latest release，方便设备上匿名下载（artifact 下载需要登录）
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: chuichui latest
+          body: |
+            自动构建产物。
+            - 模块包名 `com.cycy.chuichui`
+            - 目标应用 `com.alibaba.android.rimet`（钉钉）
+            - libxposed API 102
+          files: out/*.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
