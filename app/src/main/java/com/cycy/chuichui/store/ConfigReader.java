@@ -1,9 +1,14 @@
 package com.cycy.chuichui.store;
 
+import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 
@@ -21,26 +26,28 @@ import io.github.libxposed.api.XposedModule;
 /**
  * hook 侧（目标进程内）读取配置。
  *
- * 通道按可靠性排序，逐条尝试：
- *  1) openRemoteFile("profiles.json")  —— 官方文件通道（模块 shared data 目录）
- *  2) getRemotePreferences("profile")  —— 官方 prefs 通道
- *  3) ContentProvider call("config")   —— 本地 Binder，最稳，但要拿到目标 App 自己的 Context
+ * 通道按可靠性排序：
+ *  1) 显式广播（主通道）
+ *     钉钉 targetSdk=30，受 Android 11+ 包可见性限制，ContentResolver.call 会抛
+ *     "Unknown authority"。显式广播（setPackage）不受该限制，静态 receiver 还能
+ *     把没在运行的模块 App 拉起来。
+ *  2) openRemoteFile("profiles.json")  —— 官方文件通道
+ *  3) getRemotePreferences("profile")  —— 官方 prefs 通道
+ *  4) ContentProvider call("config")   —— 包可见性允许时可用
  *
- * 注意第 3 条：必须用目标 App 的 Application Context。
- * 用 ActivityThread.getSystemContext() 会带上 callingPackage="android"，
- * 与进程 uid 不匹配，Provider 端会抛 SecurityException。
- *
- * 带 2 秒 TTL 缓存，避免每次定位回调都读一遍。
+ * 广播是异步的：Application.onCreate 时先发一次请求，定位回调来的时候结果通常已经到了。
+ * 带 2 秒 TTL 缓存。
  */
 public final class ConfigReader {
 
     private static final long TTL_MS = 2000;
 
     private static XposedModule module;
-    private static Profiles cached;
-    private static long cachedAt;
-    private static String lastSource = "";
-    private static Context appContext;
+    private static volatile Profiles cached;
+    private static volatile long cachedAt;
+    private static volatile String lastSource = "";
+    private static volatile Context appContext;
+    private static volatile boolean requesting;
     private static boolean listedRemote;
     private static boolean loggedRemoteError;
 
@@ -53,7 +60,9 @@ public final class ConfigReader {
 
     /** 由 Application.onCreate 的 hook 注入，最可靠的 Context 来源 */
     public static void setAppContext(Context ctx) {
-        if (ctx != null) appContext = ctx;
+        if (ctx == null) return;
+        appContext = ctx;
+        requestAsync();
     }
 
     public static String lastSource() {
@@ -62,10 +71,11 @@ public final class ConfigReader {
 
     public static Profile current() {
         long now = SystemClock.elapsedRealtime();
-        if (cached != null && now - cachedAt < TTL_MS) {
-            return cached.currentProfile();
+        Profiles ps = cached;
+        if (ps != null && now - cachedAt < TTL_MS) {
+            return ps.currentProfile();
         }
-        Profiles ps = load();
+        ps = load();
         if (ps != null) {
             cached = ps;
             cachedAt = now;
@@ -114,34 +124,65 @@ public final class ConfigReader {
             }
         }
 
-        // 3) ContentProvider（需要目标 App 自己的 Context）
-        Context ctx = appContext();
-        if (ctx == null) {
-            // Application 还没就绪（hook 装得太早），等下次定位回调再试
-            note("none(context 未就绪)");
-            return null;
-        }
-        try {
-            Bundle b = ctx.getContentResolver().call(
-                    Uri.parse("content://" + ConfigStore.AUTHORITY), "config", null, null);
-            if (b != null) {
-                json = b.getString("json");
-                Logger.i("provider 返回 keys=" + b.keySet()
-                        + " jsonLen=" + (json == null ? -1 : json.length())
-                        + " error=" + b.getString("error"));
-                if (valid(json)) {
-                    note("provider");
-                    return Profiles.fromJson(json);
+        // 3) ContentProvider（受包可见性限制，通常不可用，留着兜底）
+        Context ctx = appContext;
+        if (ctx != null) {
+            try {
+                Bundle b = ctx.getContentResolver().call(
+                        Uri.parse("content://" + ConfigStore.AUTHORITY), "config", null, null);
+                if (b != null) {
+                    json = b.getString("json");
+                    if (valid(json)) {
+                        note("provider");
+                        return Profiles.fromJson(json);
+                    }
                 }
-            } else {
-                Logger.w("provider 返回 null Bundle");
+            } catch (Throwable t) {
+                Logger.w("provider 读取失败: " + t);
             }
-        } catch (Throwable t) {
-            Logger.w("provider 读取失败: " + t);
         }
 
-        note("none");
+        // 4) 触发一次广播请求，结果到了会更新缓存
+        requestAsync();
+        note("none(等待广播)");
         return null;
+    }
+
+    /** 向模块 App 请求配置（显式有序广播，结果走 resultData） */
+    private static void requestAsync() {
+        Context ctx = appContext;
+        if (ctx == null || requesting) return;
+        requesting = true;
+        try {
+            Intent intent = new Intent(ConfigStore.ACTION_GET);
+            intent.setPackage(ConfigStore.MODULE_PACKAGE);
+            BroadcastReceiver receiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context c, Intent i) {
+                    try {
+                        String json = getResultData();
+                        if (valid(json)) {
+                            Profiles ps = Profiles.fromJson(json);
+                            cached = ps;
+                            cachedAt = SystemClock.elapsedRealtime();
+                            note("broadcast");
+                            Logger.i("广播通道拿到配置，共 " + ps.list.size() + " 条");
+                        } else {
+                            Logger.w("广播返回空配置");
+                        }
+                    } catch (Throwable t) {
+                        Logger.w("广播结果解析失败: " + t);
+                    } finally {
+                        requesting = false;
+                    }
+                }
+            };
+            ctx.sendOrderedBroadcast(intent, null, receiver,
+                    new Handler(Looper.getMainLooper()), Activity.RESULT_OK, null, null);
+        } catch (Throwable t) {
+            requesting = false;
+            Logger.w("请求配置广播失败: " + t);
+        }
     }
 
     private static boolean valid(String json) {
@@ -188,7 +229,7 @@ public final class ConfigReader {
     /**
      * 只接受目标 App 自己的 Application Context。
      * 这里刻意不缓存失败结果：hook 安装时 Application 可能还没创建，
-     * 第一次定位回调时再取就能拿到。
+     * Application.onCreate hook 触发后就能拿到。
      */
     static Context appContext() {
         if (appContext != null) return appContext;

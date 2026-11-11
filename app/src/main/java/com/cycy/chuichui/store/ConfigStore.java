@@ -26,6 +26,11 @@ public final class ConfigStore {
     public static final String SP_KEY = "json";
     public static final String AUTHORITY = "com.cycy.chuichui.config";
 
+    /** 模块包名（目标进程里硬编码，用来发显式广播） */
+    public static final String MODULE_PACKAGE = "com.cycy.chuichui";
+    /** 目标进程请求配置的广播 action */
+    public static final String ACTION_GET = "com.cycy.chuichui.GET_CONFIG";
+
     private ConfigStore() {
     }
 

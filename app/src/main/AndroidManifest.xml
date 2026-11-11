@@ -47,6 +47,15 @@
             android:name=".provider.ConfigProvider"
             android:authorities="com.cycy.chuichui.config"
             android:exported="true" />
+
+        <!-- 主通道：目标进程受包可见性限制调不了 Provider，改用显式广播 -->
+        <receiver
+            android:name=".provider.ConfigReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.cycy.chuichui.GET_CONFIG" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
