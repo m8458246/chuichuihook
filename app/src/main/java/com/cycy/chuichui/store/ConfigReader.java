@@ -40,6 +40,8 @@ import io.github.libxposed.api.XposedModule;
 public final class ConfigReader {
 
     private static final long TTL_MS = 3000;
+    /** 推送过来的配置优先级更高、缓存更久：用户刚改完就该用新的 */
+    private static final long PUSH_TTL_MS = 5 * 60 * 1000;
 
     private static XposedModule module;
     private static volatile Profiles cached;
@@ -48,6 +50,7 @@ public final class ConfigReader {
     private static volatile Context appContext;
     private static volatile boolean requesting;
     private static volatile boolean receiverRegistered;
+    private static volatile boolean fromPush;
     private static boolean listedRemote;
     private static boolean loggedRemoteError;
     private static boolean loggedPrefs;
@@ -74,9 +77,10 @@ public final class ConfigReader {
     public static Profile current() {
         Profiles ps = cached;
         if (ps != null) {
-            // 有缓存就直接用；过期了异步刷新，不阻塞定位回调
-            if (SystemClock.elapsedRealtime() - cachedAt >= TTL_MS) requestAsync();
-            return ps.currentProfile();
+            long age = SystemClock.elapsedRealtime() - cachedAt;
+            long ttl = fromPush ? PUSH_TTL_MS : TTL_MS;
+            if (age < ttl) return ps.currentProfile();
+            fromPush = false;
         }
         ps = load();
         if (ps != null) {
@@ -181,6 +185,7 @@ public final class ConfigReader {
                             Profiles ps = Profiles.fromJson(json);
                             cached = ps;
                             cachedAt = SystemClock.elapsedRealtime();
+                            fromPush = true;
                             note("broadcast");
                             Logger.i("广播通道拿到配置，共 " + ps.list.size() + " 条");
                         } else {
@@ -215,6 +220,7 @@ public final class ConfigReader {
                             Profiles ps = Profiles.fromJson(json);
                             cached = ps;
                             cachedAt = SystemClock.elapsedRealtime();
+                            fromPush = true;
                             note("push");
                             Logger.i("收到配置推送，共 " + ps.list.size() + " 条");
                         }

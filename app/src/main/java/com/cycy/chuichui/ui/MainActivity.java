@@ -38,7 +38,7 @@ public class MainActivity extends Activity {
 
         list.setOnItemClickListener((parent, view, position, id) -> select(position));
         list.setOnItemLongClickListener((parent, view, position, id) -> {
-            confirmDelete(position);
+            showMenu(position);
             return true;
         });
 
@@ -97,6 +97,24 @@ public class MainActivity extends Activity {
         ConfigStore.save(this, profiles);
         adapter.setData(profiles.list, profiles.current);
         updateStatus();
+    }
+
+    /** 长按弹出菜单：编辑 / 删除（点击是切换当前配置） */
+    private void showMenu(int position) {
+        if (profiles == null || position < 0 || position >= profiles.list.size()) return;
+        final Profile p = profiles.list.get(position);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(p.displayTitle())
+                .setItems(new String[]{"编辑", "删除"}, (d, which) -> {
+                    if (which == 0) {
+                        Intent i = new Intent(this, EditActivity.class);
+                        i.putExtra("id", p.id);
+                        startActivity(i);
+                    } else {
+                        confirmDelete(position);
+                    }
+                })
+                .show();
     }
 
     private void confirmDelete(int position) {
