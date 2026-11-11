@@ -64,6 +64,9 @@ public class ModuleMain extends XposedModule {
         int wifi = 0;
         int cell = 0;
 
+        // 0) 拿目标 App 的 Context —— 后面调 ContentProvider 必须用它
+        installContextHook(cl);
+
         try {
             amap = AmapHooks.install(this, cl);
         } catch (Throwable t) {
@@ -88,6 +91,29 @@ public class ModuleMain extends XposedModule {
             Logger.i("当前配置通道: " + ConfigReader.lastSource());
         } catch (Throwable t) {
             Logger.w("读取配置失败: " + t);
+        }
+    }
+
+    /**
+     * hook Application.onCreate，把 Application 实例存起来。
+     * 目标进程里拿 Context 只有两条路：这个 hook，或者反射 currentApplication；
+     * 后者在 hook 安装得太早时可能返回 null，所以两个都留着。
+     */
+    private void installContextHook(ClassLoader cl) {
+        try {
+            Class<?> appCls = Class.forName("android.app.Application", false, cl);
+            java.lang.reflect.Method onCreate = appCls.getDeclaredMethod("onCreate");
+            onCreate.setAccessible(true);
+            hook(onCreate).setId("chuichui_app_ctx").intercept(chain -> {
+                Object app = chain.getThisObject();
+                if (app instanceof android.content.Context) {
+                    ConfigReader.setAppContext((android.content.Context) app);
+                }
+                return chain.proceed();
+            });
+            Logger.i("Application.onCreate hook 已安装");
+        } catch (Throwable t) {
+            Logger.w("hook Application.onCreate 失败: " + t);
         }
     }
 }

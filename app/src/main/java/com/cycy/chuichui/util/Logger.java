@@ -89,33 +89,17 @@ public final class Logger {
     }
 
     private static Context app() {
-        if (appResolved) return app;
-        appResolved = true;
+        if (app != null) return app;
         try {
             Class<?> at = Class.forName("android.app.ActivityThread");
             java.lang.reflect.Method m = at.getDeclaredMethod("currentApplication");
             m.setAccessible(true);
             Object o = m.invoke(null);
-            if (o instanceof Context) {
-                app = (Context) o;
-                return app;
-            }
+            if (o instanceof Context) app = (Context) o;
         } catch (Throwable ignored) {
         }
-        // 兜底：systemContext（日志回传只需要 ContentResolver）
-        try {
-            Class<?> at = Class.forName("android.app.ActivityThread");
-            java.lang.reflect.Method cur = at.getDeclaredMethod("currentActivityThread");
-            cur.setAccessible(true);
-            Object thread = cur.invoke(null);
-            if (thread != null) {
-                java.lang.reflect.Method gsc = at.getDeclaredMethod("getSystemContext");
-                gsc.setAccessible(true);
-                Object ctx = gsc.invoke(thread);
-                if (ctx instanceof Context) app = (Context) ctx;
-            }
-        } catch (Throwable ignored) {
-        }
+        // 注意：不要用 getSystemContext 兜底 —— 它的 callingPackage 是 "android"，
+        // 调 Provider 会被系统以 "calling package does not match uid" 拒绝
         return app;
     }
 }

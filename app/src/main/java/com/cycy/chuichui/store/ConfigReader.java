@@ -16,16 +16,19 @@ import java.io.FileInputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 
-import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 
 /**
  * hook 侧（目标进程内）读取配置。
  *
- * 三条通道按可靠性排序，逐条尝试：
- *  1) openRemoteFile("profiles.json")      —— 官方文件通道，最直接
- *  2) getRemotePreferences("profile")      —— 官方 prefs 通道
- *  3) ContentProvider call("config")       —— 本地 Binder，无权限门槛
+ * 通道按可靠性排序，逐条尝试：
+ *  1) openRemoteFile("profiles.json")  —— 官方文件通道（模块 shared data 目录）
+ *  2) getRemotePreferences("profile")  —— 官方 prefs 通道
+ *  3) ContentProvider call("config")   —— 本地 Binder，最稳，但要拿到目标 App 自己的 Context
+ *
+ * 注意第 3 条：必须用目标 App 的 Application Context。
+ * 用 ActivityThread.getSystemContext() 会带上 callingPackage="android"，
+ * 与进程 uid 不匹配，Provider 端会抛 SecurityException。
  *
  * 带 2 秒 TTL 缓存，避免每次定位回调都读一遍。
  */
@@ -48,6 +51,11 @@ public final class ConfigReader {
         module = m;
     }
 
+    /** 由 Application.onCreate 的 hook 注入，最可靠的 Context 来源 */
+    public static void setAppContext(Context ctx) {
+        if (ctx != null) appContext = ctx;
+    }
+
     public static String lastSource() {
         return lastSource;
     }
@@ -68,7 +76,7 @@ public final class ConfigReader {
     private static Profiles load() {
         String json;
 
-        // 1) openRemoteFile（先列一次目录，方便定位路径语义）
+        // 1) openRemoteFile（模块 shared data 目录）
         if (module != null) {
             if (!listedRemote) {
                 listedRemote = true;
@@ -83,12 +91,10 @@ public final class ConfigReader {
                     Logger.w("listRemoteFiles 失败: " + t);
                 }
             }
-            for (String name : new String[]{ConfigStore.FILE_NAME, "files/" + ConfigStore.FILE_NAME}) {
-                json = readRemoteFile(name);
-                if (valid(json)) {
-                    note("remote-file(" + name + ")");
-                    return Profiles.fromJson(json);
-                }
+            json = readRemoteFile(ConfigStore.FILE_NAME);
+            if (valid(json)) {
+                note("remote-file");
+                return Profiles.fromJson(json);
             }
         }
 
@@ -108,20 +114,21 @@ public final class ConfigReader {
             }
         }
 
-        // 3) ContentProvider
+        // 3) ContentProvider（需要目标 App 自己的 Context）
+        Context ctx = appContext();
+        if (ctx == null) {
+            // Application 还没就绪（hook 装得太早），等下次定位回调再试
+            note("none(context 未就绪)");
+            return null;
+        }
         try {
-            Context ctx = appContext();
-            if (ctx == null) {
-                Logger.w("拿不到 Context，provider 通道跳过");
-            } else {
-                Bundle b = ctx.getContentResolver().call(
-                        Uri.parse("content://" + ConfigStore.AUTHORITY), "config", null, null);
-                if (b != null) {
-                    json = b.getString("json");
-                    if (valid(json)) {
-                        note("provider");
-                        return Profiles.fromJson(json);
-                    }
+            Bundle b = ctx.getContentResolver().call(
+                    Uri.parse("content://" + ConfigStore.AUTHORITY), "config", null, null);
+            if (b != null) {
+                json = b.getString("json");
+                if (valid(json)) {
+                    note("provider");
+                    return Profiles.fromJson(json);
                 }
             }
         } catch (Throwable t) {
@@ -173,11 +180,13 @@ public final class ConfigReader {
         }
     }
 
-    /** 目标进程里没有 Context：先试 currentApplication，再退到 systemContext */
+    /**
+     * 只接受目标 App 自己的 Application Context。
+     * 这里刻意不缓存失败结果：hook 安装时 Application 可能还没创建，
+     * 第一次定位回调时再取就能拿到。
+     */
     static Context appContext() {
         if (appContext != null) return appContext;
-
-        // 1) ActivityThread.currentApplication()（App 已经起来时最准）
         try {
             Class<?> at = Class.forName("android.app.ActivityThread");
             Method m = at.getDeclaredMethod("currentApplication");
@@ -187,31 +196,8 @@ public final class ConfigReader {
                 appContext = (Context) app;
                 return appContext;
             }
-        } catch (Throwable t) {
-            Logger.w("currentApplication 不可用: " + t);
+        } catch (Throwable ignored) {
         }
-
-        // 2) ActivityThread.currentActivityThread().getSystemContext()
-        //    系统 Context 的 ContentResolver 调 Provider 不受调用方包可见性影响
-        try {
-            Class<?> at = Class.forName("android.app.ActivityThread");
-            Method cur = at.getDeclaredMethod("currentActivityThread");
-            cur.setAccessible(true);
-            Object thread = cur.invoke(null);
-            if (thread != null) {
-                Method gsc = at.getDeclaredMethod("getSystemContext");
-                gsc.setAccessible(true);
-                Object ctx = gsc.invoke(thread);
-                if (ctx instanceof Context) {
-                    appContext = (Context) ctx;
-                    Logger.i("使用 systemContext 访问 provider");
-                    return appContext;
-                }
-            }
-        } catch (Throwable t) {
-            Logger.w("systemContext 不可用: " + t);
-        }
-
         return null;
     }
 }
