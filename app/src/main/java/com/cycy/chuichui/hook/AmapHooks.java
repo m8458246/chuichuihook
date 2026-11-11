@@ -331,7 +331,7 @@ public final class AmapHooks {
             double lng = getDouble(fake, "getLongitude", p.lng);
             double dist = Drift.distance(p.lat, p.lng, lat, lng);
             String addr = getString(fake, "getAddress", "");
-            Logger.location(Logger.now(), lat, lng, p.lat, p.lng, dist, fields, addr);
+            Logger.location(lat, lng, p.lat, p.lng, dist, fields, addr);
         } catch (Throwable ignored) {
         }
     }

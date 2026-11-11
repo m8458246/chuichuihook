@@ -83,14 +83,14 @@ public final class Logger {
 
     /**
      * 一次定位替换的审计日志。
-     * 格式：时间  实际坐标  目标坐标  偏移  地址
+     * 格式：时间  实际坐标  目标坐标  偏移  字段数  地址
      */
-    public static void location(String time, double lat, double lng,
+    public static void location(double lat, double lng,
                                 double targetLat, double targetLng,
                                 double offsetMeters, int fields, String address) {
         String line = String.format(Locale.US,
-                "%s  %.6f,%.6f  目标 %.6f,%.6f  偏移 %.1fm  字段 %d%s",
-                time, lat, lng, targetLat, targetLng, offsetMeters, fields,
+                "%.6f,%.6f  目标 %.6f,%.6f  偏移 %.1fm  字段 %d%s",
+                lat, lng, targetLat, targetLng, offsetMeters, fields,
                 (address == null || address.isEmpty()) ? "" : ("  " + address));
         emit(Log.INFO, line, null);
     }
