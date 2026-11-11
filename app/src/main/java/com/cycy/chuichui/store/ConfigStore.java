@@ -85,8 +85,45 @@ public final class ConfigStore {
             sp(ctx).edit().putString(SP_KEY, json).commit();
         } catch (Throwable ignored) {
         }
+        // 发布到 LSPosed 的 shared data 目录（官方 openRemoteFile 通道读这里）
+        final Context app = ctx.getApplicationContext();
+        new Thread(() -> publishToLsposed(app), "chuichui-publish").start();
         // 主动推送给目标进程，配置改完立即生效（目标进程没运行就丢掉，下次启动会主动请求）
         push(ctx, json);
+    }
+
+    /**
+     * 把 profiles.json 复制到 /data/adb/lspd/modules/<userId>/<pkg>/files/。
+     *
+     * 这个目录是 libxposed 的 "shared data directory"，目标进程通过
+     * openRemoteFile 读取。目录本身在 /data/adb 下（root 700），普通 App
+     * 写不了，所以这里借 su 复制。用户首次会看到一次 root 授权弹窗。
+     */
+    private static void publishToLsposed(Context ctx) {
+        try {
+            File src = file(ctx);
+            if (!src.exists()) return;
+
+            int userId = android.os.Process.myUid() / 100000;
+            String dir = "/data/adb/lspd/modules/" + userId + "/" + MODULE_PACKAGE + "/files";
+            String cmd = "mkdir -p '" + dir + "'"
+                    + " && cp '" + src.getAbsolutePath() + "' '" + dir + "/" + FILE_NAME + "'"
+                    + " && chmod 755 '" + dir + "'"
+                    + " && chmod 666 '" + dir + "/" + FILE_NAME + "'";
+
+            String[] suPaths = {"/system/bin/su", "/data/adb/ksu/bin/su", "/data/adb/magisk/su", "su"};
+            for (String su : suPaths) {
+                try {
+                    File bin = new File(su);
+                    if (!"su".equals(su) && !bin.exists()) continue;
+                    Process p = Runtime.getRuntime().exec(new String[]{su, "-c", cmd});
+                    int code = p.waitFor();
+                    if (code == 0) return;
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     private static void push(Context ctx, String json) {
