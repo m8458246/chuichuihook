@@ -126,10 +126,15 @@ public final class ConfigReader {
                     Uri.parse("content://" + ConfigStore.AUTHORITY), "config", null, null);
             if (b != null) {
                 json = b.getString("json");
+                Logger.i("provider 返回 keys=" + b.keySet()
+                        + " jsonLen=" + (json == null ? -1 : json.length())
+                        + " error=" + b.getString("error"));
                 if (valid(json)) {
                     note("provider");
                     return Profiles.fromJson(json);
                 }
+            } else {
+                Logger.w("provider 返回 null Bundle");
             }
         } catch (Throwable t) {
             Logger.w("provider 读取失败: " + t);
