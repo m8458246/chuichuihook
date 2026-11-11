@@ -56,6 +56,15 @@
                 <action android:name="com.cycy.chuichui.GET_CONFIG" />
             </intent-filter>
         </receiver>
+
+        <!-- 日志兜底：目标进程写不了公共目录时把日志行广播过来 -->
+        <receiver
+            android:name=".provider.LogReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.cycy.chuichui.LOG" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

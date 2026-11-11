@@ -2,6 +2,7 @@ package com.cycy.chuichui.store;
 
 import android.app.Activity;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -27,21 +28,29 @@ import io.github.libxposed.api.XposedModule;
 /**
  * hook 侧（目标进程内）读取配置。
  *
- * 主通道是显式广播：
- *  - 钉钉 targetSdk=30，受 Android 11+ 包可见性限制，ContentResolver.call 直接抛
- *    "Unknown authority"，所以 Provider 只能当兜底；
- *  - 显式广播（setPackage）不受包可见性限制，加 FLAG_INCLUDE_STOPPED_PACKAGES 后
- *    连被 force-stop 的模块 App 也能拉起；
- *  - 模块 App 保存配置时会主动推送一条广播，钉钉这边注册的动态 receiver 收到就更新缓存，
- *    配置变更即时生效。
+ * 第一优先级是「钉钉自己的 SharedPreferences」：
+ * 模块代码就跑在钉钉进程里，读写自己的 prefs 不需要任何跨进程通道，也不需要 root，
+ * 钉钉重启后照样能拿到上次推送/广播收到的配置。
  *
- * 另外还保留 openRemoteFile / getRemotePreferences 两条官方通道。
+ * 读取顺序：
+ *  1) 钉钉自己的 prefs（chuichui_config）—— 持久、最可靠
+ *  2) openRemoteFile("profiles.json")     —— LSPosed 共享目录（需要 root 同步）
+ *  3) getRemotePreferences("profile")     —— 官方 prefs 通道
+ *  4) ContentProvider call("config")      —— 包可见性允许时可用
+ *  5) 显式广播请求                         —— 拉起模块 App 问一次
+ *
+ * 任何通道拿到的配置都会回写进钉钉自己的 prefs，所以只要成功过一次，
+ * 以后即使模块 App 完全不可用也能继续用。
  */
 public final class ConfigReader {
 
     private static final long TTL_MS = 3000;
-    /** 推送过来的配置优先级更高、缓存更久：用户刚改完就该用新的 */
+    /** 推送/广播来的配置优先级更高、缓存更久 */
     private static final long PUSH_TTL_MS = 5 * 60 * 1000;
+
+    /** 存在钉钉进程里的配置文件名 */
+    public static final String TARGET_PREFS = "chuichui_config";
+    public static final String TARGET_KEY = "profiles";
 
     private static XposedModule module;
     private static volatile Profiles cached;
@@ -94,7 +103,17 @@ public final class ConfigReader {
     private static Profiles load() {
         String json;
 
-        // 1) openRemoteFile（模块 shared data 目录）
+        // 1) 钉钉自己的 SharedPreferences（持久化，最可靠）
+        Context ctx = appContext;
+        if (ctx != null) {
+            json = readPersisted(ctx);
+            if (valid(json)) {
+                note("target-prefs");
+                return Profiles.fromJson(json);
+            }
+        }
+
+        // 2) openRemoteFile（LSPosed 共享目录）
         if (module != null) {
             if (!listedRemote) {
                 listedRemote = true;
@@ -112,11 +131,12 @@ public final class ConfigReader {
             json = readRemoteFile(ConfigStore.FILE_NAME);
             if (valid(json)) {
                 note("remote-file");
+                persist(ctx, json);
                 return Profiles.fromJson(json);
             }
         }
 
-        // 2) remote preferences
+        // 3) remote preferences
         if (module != null) {
             try {
                 SharedPreferences sp = module.getRemotePreferences(ConfigStore.SP_NAME);
@@ -129,6 +149,7 @@ public final class ConfigReader {
                     }
                     if (valid(json)) {
                         note("remote-prefs");
+                        persist(ctx, json);
                         return Profiles.fromJson(json);
                     }
                 }
@@ -137,8 +158,7 @@ public final class ConfigReader {
             }
         }
 
-        // 3) ContentProvider（受包可见性限制，通常不可用，留着兜底）
-        Context ctx = appContext;
+        // 4) ContentProvider（受包可见性限制，通常不可用，留着兜底）
         if (ctx != null) {
             try {
                 Bundle b = ctx.getContentResolver().call(
@@ -147,6 +167,7 @@ public final class ConfigReader {
                     json = b.getString("json");
                     if (valid(json)) {
                         note("provider");
+                        persist(ctx, json);
                         return Profiles.fromJson(json);
                     }
                 }
@@ -154,11 +175,35 @@ public final class ConfigReader {
             }
         }
 
-        // 4) 广播请求（异步，结果到了更新缓存）
+        // 5) 广播请求（异步，结果到了更新缓存）
         requestAsync();
         note("none(等待广播)");
         return null;
     }
+
+    // ------------------------------------------------------------------ 持久化
+
+    private static SharedPreferences targetPrefs(Context ctx) {
+        return ctx.getSharedPreferences(TARGET_PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static String readPersisted(Context ctx) {
+        try {
+            return targetPrefs(ctx).getString(TARGET_KEY, null);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static void persist(Context ctx, String json) {
+        if (ctx == null || !valid(json)) return;
+        try {
+            targetPrefs(ctx).edit().putString(TARGET_KEY, json).commit();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // ------------------------------------------------------------------ 广播
 
     /** 向模块 App 请求配置（显式有序广播，结果走 resultData） */
     private static void requestAsync() {
@@ -167,12 +212,10 @@ public final class ConfigReader {
         requesting = true;
         try {
             Intent intent = new Intent(ConfigStore.ACTION_GET);
-            // 显式组件：包可见性只过滤隐式 intent，显式 ComponentName 不受限制。
-            // 用 setPackage 的话，钉钉（targetSdk=30）看不到模块包，广播会被 AMS 直接丢弃。
-            intent.setComponent(new android.content.ComponentName(
+            // 显式组件：包可见性只过滤隐式 intent
+            intent.setComponent(new ComponentName(
                     ConfigStore.MODULE_PACKAGE, ConfigStore.RECEIVER_CLASS));
             intent.setPackage(ConfigStore.MODULE_PACKAGE);
-            // 模块 App 被 force-stop 过也要能收到
             intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
 
             BroadcastReceiver receiver = new BroadcastReceiver() {
@@ -186,6 +229,7 @@ public final class ConfigReader {
                             cached = ps;
                             cachedAt = SystemClock.elapsedRealtime();
                             fromPush = true;
+                            persist(appContext, json);
                             note("broadcast");
                             Logger.i("广播通道拿到配置，共 " + ps.list.size() + " 条");
                         } else {
@@ -206,7 +250,7 @@ public final class ConfigReader {
         }
     }
 
-    /** 模块 App 保存配置时会推送，这里常驻接收，配置改完立即生效 */
+    /** 模块 App 保存配置时会推送，这里常驻接收 */
     private static void registerPushReceiver(Context ctx) {
         if (receiverRegistered) return;
         receiverRegistered = true;
@@ -221,6 +265,7 @@ public final class ConfigReader {
                             cached = ps;
                             cachedAt = SystemClock.elapsedRealtime();
                             fromPush = true;
+                            persist(appContext, json);
                             note("push");
                             Logger.i("收到配置推送，共 " + ps.list.size() + " 条");
                         }
@@ -246,6 +291,8 @@ public final class ConfigReader {
             Logger.w("注册配置推送接收器失败: " + t);
         }
     }
+
+    // ------------------------------------------------------------------
 
     private static boolean valid(String json) {
         return json != null && !json.trim().isEmpty() && json.contains("\"list\"");
@@ -290,7 +337,7 @@ public final class ConfigReader {
 
     /**
      * 只接受目标 App 自己的 Application Context。
-     * 这里刻意不缓存失败结果：hook 安装时 Application 可能还没创建，
+     * 不缓存失败结果：hook 安装时 Application 可能还没创建，
      * Application.onCreate hook 触发后就能拿到。
      */
     static Context appContext() {

@@ -32,10 +32,16 @@ public final class ConfigStore {
     public static final String ACTION_GET = "com.cycy.chuichui.GET_CONFIG";
     /** 模块 App 主动推送配置的广播 action */
     public static final String ACTION_PUSH = "com.cycy.chuichui.PUSH_CONFIG";
+    /** 目标进程回传日志的广播 action（MediaStore 写不了时兜底） */
+    public static final String ACTION_LOG = "com.cycy.chuichui.LOG";
     /** 目标应用包名（推送广播的接收方） */
     public static final String TARGET_PACKAGE = "com.alibaba.android.rimet";
     /** 配置应答接收器的完整类名（目标进程用显式 ComponentName 发广播） */
     public static final String RECEIVER_CLASS = "com.cycy.chuichui.provider.ConfigReceiver";
+    /** 日志回传接收器 */
+    public static final String LOG_RECEIVER_CLASS = "com.cycy.chuichui.provider.LogReceiver";
+    /** 公共目录里的配置副本（只读，方便审计/备份） */
+    public static final String PUBLIC_DIR = "Download/chuichuihook/";
 
     private ConfigStore() {
     }
@@ -88,8 +94,50 @@ public final class ConfigStore {
         // 发布到 LSPosed 的 shared data 目录（官方 openRemoteFile 通道读这里）
         final Context app = ctx.getApplicationContext();
         new Thread(() -> publishToLsposed(app), "chuichui-publish").start();
+        // 公共目录留一份人类可读的副本，方便审计/备份（目标进程读不到，只给人看）
+        new Thread(() -> publishPublicCopy(app, json), "chuichui-public").start();
         // 主动推送给目标进程，配置改完立即生效（目标进程没运行就丢掉，下次启动会主动请求）
         push(ctx, json);
+    }
+
+    /** 把 profiles.json 写一份到 /sdcard/Download/chuichuihook/，只读副本 */
+    private static void publishPublicCopy(Context ctx, String json) {
+        if (android.os.Build.VERSION.SDK_INT < 29) return;
+        try {
+            android.content.ContentResolver cr = ctx.getContentResolver();
+            android.net.Uri collection =
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+            android.net.Uri target = null;
+            android.database.Cursor c = null;
+            try {
+                c = cr.query(collection,
+                        new String[]{android.provider.MediaStore.Downloads._ID},
+                        android.provider.MediaStore.Downloads.DISPLAY_NAME + "=? AND "
+                                + android.provider.MediaStore.Downloads.RELATIVE_PATH + "=?",
+                        new String[]{FILE_NAME, PUBLIC_DIR}, null);
+                if (c != null && c.moveToFirst()) {
+                    target = android.content.ContentUris.withAppendedId(collection, c.getLong(0));
+                }
+            } finally {
+                if (c != null) try {
+                    c.close();
+                } catch (Throwable ignored) {
+                }
+            }
+            if (target == null) {
+                android.content.ContentValues cv = new android.content.ContentValues();
+                cv.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, FILE_NAME);
+                cv.put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/json");
+                cv.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, PUBLIC_DIR);
+                target = cr.insert(collection, cv);
+            }
+            if (target == null) return;
+            java.io.OutputStream os = cr.openOutputStream(target, "wt");
+            if (os == null) return;
+            os.write(json.getBytes(StandardCharsets.UTF_8));
+            os.close();
+        } catch (Throwable ignored) {
+        }
     }
 
     /**

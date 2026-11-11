@@ -324,16 +324,14 @@ public final class AmapHooks {
         logReplace(fake, p, -1);
     }
 
+    /** 每次定位替换都记一行到公共日志，带时间点、目标坐标和偏移量 */
     static void logReplace(Object fake, Profile p, int fields) {
         try {
             double lat = getDouble(fake, "getLatitude", p.lat);
             double lng = getDouble(fake, "getLongitude", p.lng);
             double dist = Drift.distance(p.lat, p.lng, lat, lng);
-            String line = String.format(Locale.US,
-                    "定位替换 %.6f,%.6f（目标 %.6f,%.6f，偏移 %.1fm%s）",
-                    lat, lng, p.lat, p.lng, dist,
-                    fields >= 0 ? "，字段 " + fields : "");
-            Logger.i(line);
+            String addr = getString(fake, "getAddress", "");
+            Logger.location(Logger.now(), lat, lng, p.lat, p.lng, dist, fields, addr);
         } catch (Throwable ignored) {
         }
     }
