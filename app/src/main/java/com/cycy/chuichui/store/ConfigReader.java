@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
@@ -26,21 +27,19 @@ import io.github.libxposed.api.XposedModule;
 /**
  * hook 侧（目标进程内）读取配置。
  *
- * 通道按可靠性排序：
- *  1) 显式广播（主通道）
- *     钉钉 targetSdk=30，受 Android 11+ 包可见性限制，ContentResolver.call 会抛
- *     "Unknown authority"。显式广播（setPackage）不受该限制，静态 receiver 还能
- *     把没在运行的模块 App 拉起来。
- *  2) openRemoteFile("profiles.json")  —— 官方文件通道
- *  3) getRemotePreferences("profile")  —— 官方 prefs 通道
- *  4) ContentProvider call("config")   —— 包可见性允许时可用
+ * 主通道是显式广播：
+ *  - 钉钉 targetSdk=30，受 Android 11+ 包可见性限制，ContentResolver.call 直接抛
+ *    "Unknown authority"，所以 Provider 只能当兜底；
+ *  - 显式广播（setPackage）不受包可见性限制，加 FLAG_INCLUDE_STOPPED_PACKAGES 后
+ *    连被 force-stop 的模块 App 也能拉起；
+ *  - 模块 App 保存配置时会主动推送一条广播，钉钉这边注册的动态 receiver 收到就更新缓存，
+ *    配置变更即时生效。
  *
- * 广播是异步的：Application.onCreate 时先发一次请求，定位回调来的时候结果通常已经到了。
- * 带 2 秒 TTL 缓存。
+ * 另外还保留 openRemoteFile / getRemotePreferences 两条官方通道。
  */
 public final class ConfigReader {
 
-    private static final long TTL_MS = 2000;
+    private static final long TTL_MS = 3000;
 
     private static XposedModule module;
     private static volatile Profiles cached;
@@ -48,6 +47,7 @@ public final class ConfigReader {
     private static volatile String lastSource = "";
     private static volatile Context appContext;
     private static volatile boolean requesting;
+    private static volatile boolean receiverRegistered;
     private static boolean listedRemote;
     private static boolean loggedRemoteError;
 
@@ -62,6 +62,7 @@ public final class ConfigReader {
     public static void setAppContext(Context ctx) {
         if (ctx == null) return;
         appContext = ctx;
+        registerPushReceiver(ctx);
         requestAsync();
     }
 
@@ -70,17 +71,19 @@ public final class ConfigReader {
     }
 
     public static Profile current() {
-        long now = SystemClock.elapsedRealtime();
         Profiles ps = cached;
-        if (ps != null && now - cachedAt < TTL_MS) {
+        if (ps != null) {
+            // 有缓存就直接用；过期了异步刷新，不阻塞定位回调
+            if (SystemClock.elapsedRealtime() - cachedAt >= TTL_MS) requestAsync();
             return ps.currentProfile();
         }
         ps = load();
         if (ps != null) {
             cached = ps;
-            cachedAt = now;
+            cachedAt = SystemClock.elapsedRealtime();
+            return ps.currentProfile();
         }
-        return cached == null ? null : cached.currentProfile();
+        return null;
     }
 
     private static Profiles load() {
@@ -137,12 +140,11 @@ public final class ConfigReader {
                         return Profiles.fromJson(json);
                     }
                 }
-            } catch (Throwable t) {
-                Logger.w("provider 读取失败: " + t);
+            } catch (Throwable ignored) {
             }
         }
 
-        // 4) 触发一次广播请求，结果到了会更新缓存
+        // 4) 广播请求（异步，结果到了更新缓存）
         requestAsync();
         note("none(等待广播)");
         return null;
@@ -156,10 +158,14 @@ public final class ConfigReader {
         try {
             Intent intent = new Intent(ConfigStore.ACTION_GET);
             intent.setPackage(ConfigStore.MODULE_PACKAGE);
+            // 模块 App 被 force-stop 过也要能收到，否则广播会被静默丢弃
+            intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+
             BroadcastReceiver receiver = new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context c, Intent i) {
                     try {
+                        int code = getResultCode();
                         String json = getResultData();
                         if (valid(json)) {
                             Profiles ps = Profiles.fromJson(json);
@@ -168,7 +174,7 @@ public final class ConfigReader {
                             note("broadcast");
                             Logger.i("广播通道拿到配置，共 " + ps.list.size() + " 条");
                         } else {
-                            Logger.w("广播返回空配置");
+                            Logger.w("广播返回空配置 code=" + code);
                         }
                     } catch (Throwable t) {
                         Logger.w("广播结果解析失败: " + t);
@@ -182,6 +188,46 @@ public final class ConfigReader {
         } catch (Throwable t) {
             requesting = false;
             Logger.w("请求配置广播失败: " + t);
+        }
+    }
+
+    /** 模块 App 保存配置时会推送，这里常驻接收，配置改完立即生效 */
+    private static void registerPushReceiver(Context ctx) {
+        if (receiverRegistered) return;
+        receiverRegistered = true;
+        try {
+            BroadcastReceiver receiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context c, Intent i) {
+                    try {
+                        String json = i == null ? null : i.getStringExtra("json");
+                        if (valid(json)) {
+                            Profiles ps = Profiles.fromJson(json);
+                            cached = ps;
+                            cachedAt = SystemClock.elapsedRealtime();
+                            note("push");
+                            Logger.i("收到配置推送，共 " + ps.list.size() + " 条");
+                        }
+                    } catch (Throwable t) {
+                        Logger.w("处理配置推送失败: " + t);
+                    }
+                }
+            };
+            IntentFilter filter = new IntentFilter(ConfigStore.ACTION_PUSH);
+            boolean ok = false;
+            try {
+                Method m = Context.class.getMethod("registerReceiver",
+                        BroadcastReceiver.class, IntentFilter.class, int.class);
+                // Context.RECEIVER_EXPORTED = 2
+                m.invoke(ctx, receiver, filter, 2);
+                ok = true;
+            } catch (Throwable ignored) {
+            }
+            if (!ok) ctx.registerReceiver(receiver, filter);
+            Logger.i("配置推送接收器已注册");
+        } catch (Throwable t) {
+            receiverRegistered = false;
+            Logger.w("注册配置推送接收器失败: " + t);
         }
     }
 

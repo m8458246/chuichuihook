@@ -30,6 +30,10 @@ public final class ConfigStore {
     public static final String MODULE_PACKAGE = "com.cycy.chuichui";
     /** 目标进程请求配置的广播 action */
     public static final String ACTION_GET = "com.cycy.chuichui.GET_CONFIG";
+    /** 模块 App 主动推送配置的广播 action */
+    public static final String ACTION_PUSH = "com.cycy.chuichui.PUSH_CONFIG";
+    /** 目标应用包名（推送广播的接收方） */
+    public static final String TARGET_PACKAGE = "com.alibaba.android.rimet";
 
     private ConfigStore() {
     }
@@ -77,6 +81,19 @@ public final class ConfigStore {
         // shared prefs
         try {
             sp(ctx).edit().putString(SP_KEY, json).commit();
+        } catch (Throwable ignored) {
+        }
+        // 主动推送给目标进程，配置改完立即生效（目标进程没运行就丢掉，下次启动会主动请求）
+        push(ctx, json);
+    }
+
+    private static void push(Context ctx, String json) {
+        try {
+            android.content.Intent i = new android.content.Intent(ACTION_PUSH);
+            i.setPackage(TARGET_PACKAGE);
+            i.putExtra("json", json);
+            i.addFlags(android.content.Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+            ctx.sendBroadcast(i);
         } catch (Throwable ignored) {
         }
     }
