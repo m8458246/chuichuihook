@@ -44,8 +44,26 @@ public class MainActivity extends Activity {
 
         findViewById(R.id.btnNew).setOnClickListener(v ->
                 startActivity(new Intent(this, EditActivity.class)));
+        findViewById(R.id.btnSync).setOnClickListener(v -> sync());
         findViewById(R.id.btnLog).setOnClickListener(v ->
                 startActivity(new Intent(this, LogActivity.class)));
+    }
+
+    /** 把配置同步到 LSPosed 的 shared data 目录（需要 root） */
+    private void sync() {
+        toast("正在写入 LSPosed 目录…（首次会请求 root 权限）");
+        new Thread(() -> {
+            final boolean ok = ConfigStore.publishToLsposed(getApplicationContext());
+            runOnUiThread(() -> toast(ok
+                    ? "已同步。钉钉下次定位就会读到新配置"
+                    : "同步失败：需要给「锤锤102」授予 root 权限。\n"
+                    + "也可以在 MT 管理器里手动复制：\n"
+                    + "files/profiles.json → /data/adb/lspd/modules/0/com.cycy.chuichui/files/"));
+        }, "chuichui-sync").start();
+    }
+
+    private void toast(String s) {
+        android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_LONG).show();
     }
 
     @Override

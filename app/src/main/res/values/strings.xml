@@ -19,4 +19,5 @@
     <string name="btn_collect_cell">采集当前基站</string>
     <string name="btn_refresh">刷新</string>
     <string name="btn_clear_log">清空日志</string>
+    <string name="btn_sync">同步</string>
 </resources>

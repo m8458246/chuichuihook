@@ -98,11 +98,13 @@ public final class ConfigStore {
      * 这个目录是 libxposed 的 "shared data directory"，目标进程通过
      * openRemoteFile 读取。目录本身在 /data/adb 下（root 700），普通 App
      * 写不了，所以这里借 su 复制。用户首次会看到一次 root 授权弹窗。
+     *
+     * @return 是否写入成功
      */
-    private static void publishToLsposed(Context ctx) {
+    public static boolean publishToLsposed(Context ctx) {
         try {
             File src = file(ctx);
-            if (!src.exists()) return;
+            if (!src.exists()) return false;
 
             int userId = android.os.Process.myUid() / 100000;
             String dir = "/data/adb/lspd/modules/" + userId + "/" + MODULE_PACKAGE + "/files";
@@ -118,12 +120,13 @@ public final class ConfigStore {
                     if (!"su".equals(su) && !bin.exists()) continue;
                     Process p = Runtime.getRuntime().exec(new String[]{su, "-c", cmd});
                     int code = p.waitFor();
-                    if (code == 0) return;
+                    if (code == 0) return true;
                 } catch (Throwable ignored) {
                 }
             }
         } catch (Throwable ignored) {
         }
+        return false;
     }
 
     private static void push(Context ctx, String json) {

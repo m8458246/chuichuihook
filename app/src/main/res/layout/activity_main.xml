@@ -36,6 +36,13 @@
             android:text="@string/btn_new" />
 
         <Button
+            android:id="@+id/btnSync"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/btn_sync" />
+
+        <Button
             android:id="@+id/btnLog"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
