@@ -50,6 +50,7 @@ public final class ConfigReader {
     private static volatile boolean receiverRegistered;
     private static boolean listedRemote;
     private static boolean loggedRemoteError;
+    private static boolean loggedPrefs;
 
     private ConfigReader() {
     }
@@ -117,6 +118,11 @@ public final class ConfigReader {
                 SharedPreferences sp = module.getRemotePreferences(ConfigStore.SP_NAME);
                 if (sp != null) {
                     json = sp.getString(ConfigStore.SP_KEY, null);
+                    if (!loggedPrefs) {
+                        loggedPrefs = true;
+                        Logger.i("remote-prefs 条目数=" + sp.getAll().size()
+                                + " jsonLen=" + (json == null ? -1 : json.length()));
+                    }
                     if (valid(json)) {
                         note("remote-prefs");
                         return Profiles.fromJson(json);
@@ -157,8 +163,12 @@ public final class ConfigReader {
         requesting = true;
         try {
             Intent intent = new Intent(ConfigStore.ACTION_GET);
+            // 显式组件：包可见性只过滤隐式 intent，显式 ComponentName 不受限制。
+            // 用 setPackage 的话，钉钉（targetSdk=30）看不到模块包，广播会被 AMS 直接丢弃。
+            intent.setComponent(new android.content.ComponentName(
+                    ConfigStore.MODULE_PACKAGE, ConfigStore.RECEIVER_CLASS));
             intent.setPackage(ConfigStore.MODULE_PACKAGE);
-            // 模块 App 被 force-stop 过也要能收到，否则广播会被静默丢弃
+            // 模块 App 被 force-stop 过也要能收到
             intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
 
             BroadcastReceiver receiver = new BroadcastReceiver() {

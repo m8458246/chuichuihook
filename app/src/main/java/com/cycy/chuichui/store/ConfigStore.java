@@ -34,6 +34,8 @@ public final class ConfigStore {
     public static final String ACTION_PUSH = "com.cycy.chuichui.PUSH_CONFIG";
     /** 目标应用包名（推送广播的接收方） */
     public static final String TARGET_PACKAGE = "com.alibaba.android.rimet";
+    /** 配置应答接收器的完整类名（目标进程用显式 ComponentName 发广播） */
+    public static final String RECEIVER_CLASS = "com.cycy.chuichui.provider.ConfigReceiver";
 
     private ConfigStore() {
     }
