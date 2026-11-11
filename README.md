@@ -74,22 +74,51 @@ hook 安装完成: 定位 2 / WiFi 3 / 基站 1
 实际生效顺序（`ConfigReader`）：
 
 ```
-1. openRemoteFile("profiles.json")   ← /data/adb/lspd/modules/<userId>/<pkg>/files/
-2. getRemotePreferences("profile")
-3. ContentProvider call("config")
-4. 显式广播请求（FLAG_INCLUDE_STOPPED_PACKAGES）
-5. 模块 App 主动推送（保存配置时）
+1. 钉钉自己的 SharedPreferences（chuichui_config）  ← 第一优先级，持久化
+2. openRemoteFile("profiles.json")                 ← /data/adb/lspd/modules/<userId>/<pkg>/files/
+3. getRemotePreferences("profile")
+4. ContentProvider call("config")
+5. 显式广播请求（FLAG_INCLUDE_STOPPED_PACKAGES）
+6. 模块 App 主动推送（保存配置时）
 ```
 
-推送/广播拿到的配置会标记 `fromPush`，5 分钟内优先于 remote-file，
-所以改完配置不用重启钉钉。
+**任何通道拿到的配置都会回写进钉钉自己的 prefs**，所以只要成功过一次，
+以后即使模块 App 完全不可用、共享目录被清空，钉钉重启后照样能用。
+
+推送/广播拿到的配置标记 `fromPush`，5 分钟内优先，改完配置不用重启钉钉。
 
 **`/data/adb` 是 root 700，普通 App 写不了**，所以「同步」按钮需要 root 权限：
 
 - 有 KernelSU / Magisk 管理器：首次点「同步」时授权一次即可
 - 没有管理器：用 MT 管理器手动复制
   `files/profiles.json` → `/data/adb/lspd/modules/0/com.cycy.chuichui/files/`
-- 完全不碰 root 也能用：只要模块 App 没被 force-stop，广播/推送通道就够了
+- **完全不碰 root 也能用**：钉钉 prefs 会持久化，广播/推送通道就够了
+
+## 日志与配置副本
+
+| 文件 | 说明 |
+|---|---|
+| `/sdcard/Download/chuichuihook/hook.log` | 运行日志，**最新在最上面**，最多 500 行 |
+| `/sdcard/Download/chuichuihook/profiles.json` | 配置只读副本，方便审计/备份（目标进程读不到，只给人看） |
+
+日志每行格式：
+
+```
+11-11 17:05:50  25.066662,102.705562  目标 25.066646,102.705607  偏移 4.9m  字段 43  云南省昆明市五华区…
+```
+
+- 第一段：钉钉实际拿到的坐标（已经带随机漂移）
+- 第二段：配置里的目标坐标
+- `偏移`：本次漂移距离（应在半径内）
+- `字段`：本次覆盖了多少个 AMapLocation 字段
+
+**钉钉每拿到一次定位就写一行**，所以：
+- 有坐标行 → hook 生效
+- 偏移每次不同且在半径内 → 漂移生效
+- 一行都没有 → 模块没加载（看 logcat `-s ChuiChui`）
+
+写入走 MediaStore（Android 11+ 不能直接 File 写 /sdcard），
+不需要任何存储权限；写不了时降级成广播回传，落到模块 App 私有目录。
 
 ---
 
