@@ -24,6 +24,12 @@ public class ModuleMain extends XposedModule {
 
     private static final String TARGET_PACKAGE = "com.alibaba.android.rimet";
 
+    /**
+     * 自测用：高德地图同样使用 AMapLocationClient，可以拿来验证定位 hook 是否真的替换了字段。
+     * 正式使用可以删掉这一行。
+     */
+    private static final String DEBUG_PACKAGE = "com.autonavi.minimap";
+
     /** 一个进程可能加载多个包，按包名去重，避免重复安装 hook */
     private static final Set<String> HANDLED =
             Collections.synchronizedSet(new HashSet<String>());
@@ -48,7 +54,7 @@ public class ModuleMain extends XposedModule {
         ConfigReader.attach(this);
 
         String pkg = param.getPackageName();
-        if (!TARGET_PACKAGE.equals(pkg)) return;
+        if (!TARGET_PACKAGE.equals(pkg) && !DEBUG_PACKAGE.equals(pkg)) return;
         if (!HANDLED.add(pkg)) return;
 
         try {
