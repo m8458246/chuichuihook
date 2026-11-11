@@ -163,6 +163,14 @@ javac -nowarn -proc:none --release 17 \
   -d typecheck/out $(find app/src/main/java -name "*.java") typecheck/R.java
 ```
 
+## 开发笔记
+
+踩坑记录和设计取舍整理在 `docs/`，和 ejiahook 项目的 01-06 互补：
+
+- [07-跨进程配置通道实战](docs/07-跨进程配置通道实战.md) — 包可见性影响面、`openRemoteFile` 真实路径、广播、目标 App prefs 持久化
+- [08-定位伪造与坐标系](docs/08-定位伪造与坐标系.md) — WGS84/GCJ-02 差 362 米的实测、转换算法、漂移采样、字段覆盖
+- [09-模块工程实践与自检](docs/09-模块工程实践与自检.md) — 纯反射 hook、装完即验证的自检、反编译反查框架、调试纪律
+
 ## 已知限制
 
 - 钉钉开了防截屏（`FLAG_SECURE`），`observe_screen` 截图全黑、无障碍树为空，
