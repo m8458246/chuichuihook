@@ -108,6 +108,13 @@ public class ModuleMain extends XposedModule {
                 Object app = chain.getThisObject();
                 if (app instanceof android.content.Context) {
                     ConfigReader.setAppContext((android.content.Context) app);
+                    Logger.i("Application Context 就绪: " + app.getClass().getName());
+                    try {
+                        ConfigReader.current();
+                        Logger.i("配置来源: " + ConfigReader.lastSource());
+                    } catch (Throwable t) {
+                        Logger.w("读取配置失败: " + t);
+                    }
                 }
                 return chain.proceed();
             });
